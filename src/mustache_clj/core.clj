@@ -14,41 +14,41 @@
                            (map #(hash-map :value %1 :type (bracket-types %2)) tokens bracket-counts))
           tokens         (map #(if (= (:type %) :const) %
                                 (assoc % :type (bracket-types (first (:value %)) :reference))) tokens)]
-      ; Go through tokens again, keeping track of the path we are at. Originally these
-      ; were separate functions but it was easier to develop and test this way.
-      (let [push-path   (fn [path token] (conj path (apply str (rest (:value token)))))
-            update-path (fn [path token] (case (:type token)
-                                           :path-start (push-path path token)
-                                           :path-end   (pop path)
-                                           path))
-            add-paths (fn [result path tokens]
-                        (if-let [token (first tokens)]
-                          (let [new-path (update-path path token)]
-                             (recur (conj result (assoc token :path new-path)) new-path (rest tokens)))
-                          result))
-            tokens-with-paths (add-paths [] [] tokens)]
-        (filter #(not= (:type %) :path-start)) tokens-with-paths))))
+      tokens)))
 
 (deftest test-lexer
   (let [tokens (-> "Hello{{#names}}, {{name}} (kids{{#kids}} {{.}}{{/kids}}){{/names}}!" lexer)]
-    (is (= {:path ["names" "kids"], :value ".", :bracket 1} (nth tokens 5)))))
+    (is (= {:value "#kids", :type :path-start} (nth tokens 5)))))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(let [path-at-lvl #(get (:path %2) %1)]
-  (defn parser
-    ([tokens] (parser tokens 0))
-    ([tokens tree-lvl]
-     (let [partitions      (partition-by (partial path-at-lvl tree-lvl) tokens)
-           first-partition (first partitions)]
-       (if (and
-             (nil? (path-at-lvl tree-lvl first-partition))
-             (= 1  (count partitions)))
-         (filter #(not= (:type %) :path-end) first-partition)
-         (map    #(parser % (inc tree-lvl))  partitions))))))
+(defn parser
+  ([tokens]
+   (let [push-path   (fn [path token] (conj path (apply str (rest (:value token)))))
+         update-path (fn [path token] (case (:type token)
+                                        :path-start (push-path path token)
+                                        :path-end   (pop path)
+                                        path))
+         ; Go through tokens while keeping track of the path we are at.
+         add-paths (fn [result path tokens]
+                     (if-let [token (first tokens)]
+                       (let [new-path (update-path path token)]
+                          (recur (conj result (assoc token :path new-path)) new-path (rest tokens)))
+                       ; Finally remove :path-start nodes as we don't need them anymore
+                       (filter #(not= (:type %) :path-start) result)))
+         tokens-with-paths (add-paths [] [] tokens)]
+     ; Pass path-augmented nodes to the AST generator
+     (parser tokens-with-paths 0)))
+  ([tokens-with-paths tree-lvl]
+   (let [get-path (fn [token] (get (:path token) tree-lvl))]
+     (if (not-every? nil? (map get-path tokens-with-paths))
+       ; Descend to deeper levels of :path until all AST sibling nodes have identical paths
+       (map    #(parser % (inc tree-lvl))  (partition-by get-path tokens-with-paths))
+       ; Finally remove :path-end nodes as we don't need them anymore
+       (filter #(not= (:type %) :path-end) tokens-with-paths)))))
 
 (deftest test-parser
   (let [ast (-> "Hello{{#names}}, {{name}} (kids{{#kids}} {{.}}{{/kids}}){{/names}}!" lexer parser)]
-    (is (= {:path ["names" "kids"], :value " ", :bracket 0}
+    (is (= {:path ["names" "kids"], :value " ", :type :const}
            (-> ast (nth 1) (nth 1) (nth 0))))))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
