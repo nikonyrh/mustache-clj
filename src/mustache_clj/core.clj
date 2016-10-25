@@ -2,44 +2,36 @@
   (:use clojure.test)
   (:require [clojure.string :as str]))
 
-(let [mapping {\& "&amp;" \\ "&quot;" \> "&lt;" \< "&gt;"}]
-  (defn escape-html [value] (apply str (map #(get mapping % %) value))))
-
 (let [brackets     {\{ 1 \} 2}
       bracket-vals {"{{" 1 "}}" -1 "{{{" 100 "}}}" -100}]
-  (defn str-to-tokens [template]
+  (defn lexer [template]
     (let [template       (str/replace template #"\{\{&(.*?)\}\}" "{{{$1}}}")
           tokens         (map (partial apply str) (partition-by #(brackets % 0) template))
           bracket-counts (reductions + (map #(get bracket-vals % 0) tokens))
           tokens         (filter #(not (contains? bracket-vals (:token %)))
                            (map #(hash-map :token %1 :bracket %2) tokens bracket-counts))]
-      tokens)))
+      (let [path-tokens #{\# \/}
+            is-bracket? (fn [token type] (and (> (:bracket token) 0) (contains? path-tokens type)))
+            update-path (fn [token type path]
+                          (if (is-bracket? token type)
+                             (case type
+                               \# (conj path (apply str (rest (:token token))))
+                               \/ (pop  path))
+                             path))
+            add-paths (fn [result path tokens]
+                        (if-let [token (first tokens)]
+                          (let [new-path (update-path token (first (:token token)) path)]
+                             (recur (conj result (assoc token :path new-path)) new-path (rest tokens)))
+                          result))
+            tokens-with-paths (filter #(not (= \# (first (:token %)))) (add-paths [] [] tokens))]
+        tokens-with-paths))))
 
-(deftest test-str-to-tokens
-  (let [tokens (-> "Hello{{#names}}, {{name}} (kids{{#kids}} {{.}}{{/kids}}){{/names}}!"
-                   str-to-tokens)]
-    (is (= "#kids" (-> tokens (nth 5) :token)))))
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(deftest test-lexer-token
+  (let [tokens (-> "Hello{{#names}}, {{name}} (kids{{#kids}} {{.}}{{/kids}}){{/names}}!" lexer)]
+    (is (= "." (-> tokens (nth 5) :token)))))
 
-(defn tokens-with-paths [tokens]
-  (let [path-tokens #{\# \/}
-        is-bracket? (fn [token type] (and (> (:bracket token) 0) (contains? path-tokens type)))
-        update-path (fn [token type path]
-                      (if (is-bracket? token type)
-                         (case type
-                           \# (conj path (apply str (rest (:token token))))
-                           \/ (pop  path))
-                         path))
-        add-paths (fn [result path tokens]
-                    (if-let [token (first tokens)]
-                      (let [new-path (update-path token (first (:token token)) path)]
-                         (recur (conj result (assoc token :path new-path)) new-path (rest tokens)))
-                      result))]
-    (filter #(not (= \# (first (:token %)))) (add-paths [] [] tokens))))
-
-(deftest test-tokens-with-paths
-  (let [paths (-> "Hello{{#names}}, {{name}} (kids{{#kids}} {{.}}{{/kids}}){{/names}}!"
-                  str-to-tokens tokens-with-paths)]
+(deftest test-lexer-paths
+  (let [paths (-> "Hello{{#names}}, {{name}} (kids{{#kids}} {{.}}{{/kids}}){{/names}}!" lexer)]
     (is (= ["names" "kids"] (-> paths (nth 4) :path)))))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -57,14 +49,16 @@
 
 (deftest test-tree-from-paths
   (let [nodes (-> "Hello{{#names}}, {{name}} (kids{{#kids}} {{.}}{{/kids}}){{/names}}!"
-                  str-to-tokens tokens-with-paths tree-from-paths)]
+                  lexer tokens-with-paths tree-from-paths)]
     (is (=
           {:path ["names" "kids"], :token " ", :bracket 0}
           (-> nodes (nth 1) (nth 1) (nth 0))))))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-                                             
+
 (defn replace-symbols [tokens data]
-  (let [token-fun #(let [bracket (:bracket %)
+  (let [mapping {\& "&amp;" \\ "&quot;" \> "&lt;" \< "&gt;"}
+        escape-html (fn [value] (apply str (map #(get mapping % %) value)))
+        token-fun #(let [bracket (:bracket %)
                          token   (:token   %)]
                      (if (= 0 bracket) token
                        ((if (= 1 bracket) escape-html identity) (or (data (keyword token)) ""))))
