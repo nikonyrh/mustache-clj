@@ -14,23 +14,34 @@
           tokens         (filter #(not (contains? bracket-vals (:token %)))
                            (map #(hash-map :token %1 :bracket %2) tokens bracket-counts))]
       tokens)))
-;(-> "Hello{{#names}}, {{name}}{{/names}}!" str-to-tokens)
+
+(deftest test-str-to-tokens
+  (let [tokens (-> "Hello{{#names}}, {{name}} (kids{{#kids}} {{.}}{{/kids}}){{/names}}!"
+                   str-to-tokens)]
+    (is (= "#kids" (-> tokens (nth 5) :token)))))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn tokens-with-paths [tokens]
   (let [path-tokens #{\# \/}
-        add-paths   (fn [result path tokens]
-                      (if-let [token (first tokens)]
-                        (let [type (first (:token token))
-                              path (if (or (= 0 (:bracket token))
-                                           (not (contains? path-tokens type)))
-                                     path
-                                     (case type
-                                       \# (conj path (apply str (rest (:token token))))
-                                       \/ (pop  path)))]
-                           (recur (conj result (assoc token :path path)) path (rest tokens)))
-                        result))]
+        is-bracket? (fn [token type] (and (> (:bracket token) 0) (contains? path-tokens type)))
+        update-path (fn [token type path]
+                      (if (is-bracket? token type)
+                         (case type
+                           \# (conj path (apply str (rest (:token token))))
+                           \/ (pop  path))
+                         path))
+        add-paths (fn [result path tokens]
+                    (if-let [token (first tokens)]
+                      (let [new-path (update-path token (first (:token token)) path)]
+                         (recur (conj result (assoc token :path new-path)) new-path (rest tokens)))
+                      result))]
     (filter #(not (= \# (first (:token %)))) (add-paths [] [] tokens))))
-;(-> "Hello{{#names}}, {{name}} (kids{{#kids}} {{.}}{{/kids}}){{/names}}!" str-to-tokens tokens-with-paths)
+
+(deftest test-tokens-with-paths
+  (let [paths (-> "Hello{{#names}}, {{name}} (kids{{#kids}} {{.}}{{/kids}}){{/names}}!"
+                  str-to-tokens tokens-with-paths)]
+    (is (= ["names" "kids"] (-> paths (nth 4) :path)))))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (let [path-at-lvl #(get (:path %2) %1)]
   (defn tree-from-paths
@@ -41,13 +52,17 @@
        (if (and
              (nil? (path-at-lvl tree-lvl first-partition))
              (= 1 (count partitions)))
-         (filter #(not (= \/ (first (:token %)))) first-partition)
-         (map #(tree-from-paths % (inc tree-lvl)) partitions))))))
-;(-> "Hello{{#names}}, {{name}} (kids{{#kids}} {{.}}{{/kids}}){{/names}}!" str-to-tokens tokens-with-paths tree-from-paths)
+         (filter #(not (= \/ (first (:token %))))    first-partition)
+         (map    #(tree-from-paths % (inc tree-lvl)) partitions))))))
 
-;{:names [{:name "Felix" :kids ["a" "b"]} {:name "Jenny"}]}
-;"Hello, {{names_0_name}} (kids {{names_0_kid_0}} {{names_0_kid_1}}), {{names_1_name}} (kids )!"
-
+(deftest test-tree-from-paths
+  (let [nodes (-> "Hello{{#names}}, {{name}} (kids{{#kids}} {{.}}{{/kids}}){{/names}}!"
+                  str-to-tokens tokens-with-paths tree-from-paths)]
+    (is (=
+          {:path ["names" "kids"], :token " ", :bracket 0}
+          (-> nodes (nth 1) (nth 1) (nth 0))))))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                                             
 (defn replace-symbols [tokens data]
   (let [token-fun #(let [bracket (:bracket %)
                          token   (:token   %)]
