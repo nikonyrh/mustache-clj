@@ -4,26 +4,30 @@
 
 (let [bracket-chars {\{ 1 \} 2}
       bracket-vals  {"{{" 1 "}}" -1 "{{{" 10 "}}}" -10}
-      bracket-types {0 :const 1 :normal 10 :raw \# :path-start \/ :path-end}]
+      bracket-kws   (set (map keyword (keys bracket-vals)))
+      bracket-types {0 :const 1 :reference 10 :reference \# :path-start \/ :path-end}]
   (defn lexer [template]
     ; Split a string to tokens, group by brackets, determine their types
     (let [template       (str/replace template #"\{\{&(.*?)\}\}" "{{{$1}}}")
           tokens         (map (partial apply str) (partition-by #(bracket-chars % 0) template))
           bracket-counts (reductions + (map #(get bracket-vals % 0) tokens))
-          tokens         (filter #(not (contains? bracket-vals (:value %)))
-                           (map #(hash-map :value %1 :type (bracket-types %2)) tokens bracket-counts))
-          tokens         (map #(if (= (:type %) :const) %
-                                (assoc % :type (bracket-types (first (:value %)) :reference))) tokens)]
-      tokens)))
+          make-token     (fn [bracket-count token]
+                            (let [type  (or (bracket-types (first token)) (bracket-types bracket-count))
+                                  value (if (= :reference type) (keyword token) token)]
+                                {:value value :type type :raw (= 10 bracket-count)}))]
+      (->> tokens
+        (map make-token bracket-counts)
+        (filter #(not (contains? bracket-kws (keyword (:value %)))))
+        (map #(if (= :reference (:type %)) % (dissoc % :raw)))))))
 
 (deftest test-lexer
-  (let [tokens (-> "Hello{{#names}}, {{name}} (kids{{#kids}} {{.}}{{/kids}}){{/names}}!" lexer)]
+  (let [tokens (-> "Hello{{#names}}, {{name}} (kids{{#kids}} {{{.}}}{{/kids}}){{/names}}!" lexer)]
     (is (= {:value "#kids", :type :path-start} (nth tokens 5)))))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn parser
   ([tokens]
-   (let [push-path   (fn [path token] (conj path (apply str (rest (:value token)))))
+   (let [push-path   (fn [path token] (conj path (keyword (apply str (rest (:value token))))))
          update-path (fn [path token] (case (:type token)
                                         :path-start (push-path path token)
                                         :path-end   (pop path)
@@ -43,13 +47,33 @@
      (if (not-every? nil? (map get-path tokens-with-paths))
        ; Descend to deeper levels of :path until all AST sibling nodes have identical paths
        (map    #(parser % (inc tree-lvl))  (partition-by get-path tokens-with-paths))
-       ; Finally remove :path-end nodes as we don't need them anymore
-       (filter #(not= (:type %) :path-end) tokens-with-paths)))))
+       {:path   (:path (first tokens-with-paths))
+        ; Finally remove :path-end tokens and :path keys as we don't need them anymore
+        :tokens (map #(dissoc % :path) (filter #(not= (:type %) :path-end) tokens-with-paths))}))))
 
 (deftest test-parser
   (let [ast (-> "Hello{{#names}}, {{name}} (kids{{#kids}} {{.}}{{/kids}}){{/names}}!" lexer parser)]
-    (is (= {:path ["names" "kids"], :value " ", :type :const}
-           (-> ast (nth 1) (nth 1) (nth 0))))))
+    (is (= [:names :kids] (-> ast (nth 1) (nth 1) :path)))))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn flatten-ast
+  ([ast-node data] (flatten-ast ast-node data 0 []))
+  ([ast-node data tree-level path-prefix]
+   (if (seq? ast-node)
+     (flatten (map #(flatten-ast % data tree-level path-prefix) ast-node))
+     (let [data-key    (keyword (nth (:path ast-node) tree-level nil))
+           data        (get data data-key)
+           next-prefix (conj path-prefix data-key)
+           next-level  (inc tree-level)]
+       (if (nil? data)
+         (map #(if-not (= :reference (:type %)) % (assoc % :value (conj path-prefix (:value %)))) (:tokens ast-node))
+         (map #(flatten-ast ast-node %1 next-level (conj next-prefix %2)) data (range)))))))
+
+(deftest test-flatten-ast
+  (let [ast  (-> "Hello{{#names}}, {{name}} (kids{{#kids}} {{.}}{{/kids}}){{/names}}!" lexer parser)
+        data {:names [{:name "Felix" :kids ["a" "b"]} {:name "Jenny"}]}]
+    ;(flatten-ast ast data)
+    (is (= {:value [:names 0 :kids 1 :.], :type :reference, :raw false} (-> (flatten-ast ast data) (nth 10))))))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn replace-symbols [tokens data]
