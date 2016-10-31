@@ -12,13 +12,14 @@
           tokens         (map (partial apply str) (partition-by #(bracket-chars % 0) template))
           bracket-counts (reductions + (map #(get bracket-vals % 0) tokens))
           make-token     (fn [bracket-count token]
-                            (let [type  (or (bracket-types (first token)) (bracket-types bracket-count))
-                                  value (if (= :reference type) (keyword token) token)]
-                                {:value value :type type :raw (= 10 bracket-count)}))]
+                            (let [type  (or (bracket-types (first token)) (bracket-types bracket-count))]
+                                {:type  type
+                                 :value (if (= :reference type) (keyword token) token)
+                                 :raw   (= 10 bracket-count)}))]
       (->> tokens
-        (map make-token bracket-counts)
-        (filter #(not (contains? bracket-kws (keyword (:value %)))))
-        (map #(if (= :reference (:type %)) % (dissoc % :raw)))))))
+        (map make-token bracket-counts)                              ; Create token hash-maps
+        (filter #(not (contains? bracket-kws (keyword (:value %))))) ; Remove {{, }}, {{{ and }}} elements
+        (map #(if (= :reference (:type %)) % (dissoc % :raw)))))))   ; Remove :raw key from other types than :reference
 
 (deftest test-lexer
   (let [tokens (-> "Hello{{#names}}, {{name}} (kids{{#kids}} {{{.}}}{{/kids}}){{/names}}!" lexer)]
@@ -46,7 +47,7 @@
    (let [get-path (fn [token] (get (:path token) tree-lvl))]
      (if (not-every? nil? (map get-path tokens-with-paths))
        ; Descend to deeper levels of :path until all AST sibling nodes have identical paths
-       (map    #(parser % (inc tree-lvl))  (partition-by get-path tokens-with-paths))
+       (map #(parser % (inc tree-lvl)) (partition-by get-path tokens-with-paths))
        {:path   (:path (first tokens-with-paths))
         ; Finally remove :path-end tokens and :path keys as we don't need them anymore
         :tokens (map #(dissoc % :path) (filter #(not= (:type %) :path-end) tokens-with-paths))}))))
@@ -74,6 +75,22 @@
         data {:names [{:name "Felix" :kids ["a" "b"]} {:name "Jenny"}]}]
     ;(flatten-ast ast data)
     (is (= {:value [:names 0 :kids 1 :.], :type :reference, :raw false} (-> (flatten-ast ast data) (nth 10))))))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn flatten-data
+  ([data] (into {} (flatten (flatten-data data []))))
+  ([data path-prefix]
+   (if-not (map? data)
+    {path-prefix data} ; Replace the key, keep data as is
+    (for [[k v] data]  ; Replace keys recursively, while keeping track of the parents' keys and indexes
+     (let [new-prefix (conj path-prefix k)]
+      (if (sequential? v)
+        (map #(flatten-data %1 (conj new-prefix %2)) v (range))
+        {new-prefix v}))))))
+
+(deftest test-flatten-data
+  (let [data {:names [{:name "Felix" :kids ["a" "b"]} {:name "Jenny"}]}]
+    (is (= "b" ((flatten-data data) [:names 0 :kids 1])))))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn replace-symbols [tokens data]
