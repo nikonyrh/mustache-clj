@@ -26,35 +26,37 @@
     (is (= {:value "#kids", :type :path-start} (nth tokens 5)))))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn parser
-  ([tokens]
-   (let [push-path   (fn [path token] (conj path (keyword (apply str (rest (:value token))))))
-         update-path (fn [path token] (case (:type token)
-                                        :path-start (push-path path token)
-                                        :path-end   (pop path)
-                                        path))
-         ; Go through tokens while keeping track of the path we are at.
-         add-paths (fn [result path tokens]
-                     (if-let [token (first tokens)]
-                       (let [new-path (update-path path token)]
-                          (recur (conj result (assoc token :path new-path)) new-path (rest tokens)))
-                       ; Finally remove :path-start nodes as we don't need them anymore
-                       (filter #(not= (:type %) :path-start) result)))
-         tokens-with-paths (add-paths [] [] tokens)]
-     ; Pass path-augmented nodes to the AST generator
-     (parser tokens-with-paths 0)))
-  ([tokens-with-paths tree-lvl]
-   (let [get-path (fn [token] (get (:path token) tree-lvl))]
-     (if (not-every? nil? (map get-path tokens-with-paths))
-       ; Descend to deeper levels of :path until all AST sibling nodes have identical paths
-       (map #(parser % (inc tree-lvl)) (partition-by get-path tokens-with-paths))
-       {:path   (:path (first tokens-with-paths))
-        ; Finally remove :path-end tokens and :path keys as we don't need them anymore
-        :tokens (map #(dissoc % :path) (filter #(not= (:type %) :path-end) tokens-with-paths))}))))
+(let [filter-type (fn [type coll] (filter #(not= (:type %) type) coll))]
+  (defn parser [tokens]
+    (if (nil? (:path (first tokens)))
+      ; Let's add paths first
+      (let [push-path   (fn [path token] (conj path (keyword (apply str (rest (:value token))))))
+            update-path (fn [path token] (case (:type token)
+                                           :path-start (push-path path token)
+                                           :path-end   (pop path)
+                                           path))
+            ; Go through tokens while keeping track of the path we are at
+            add-paths (fn [result path tokens]
+                        (if-let [token (first tokens)]
+                          (let [new-path (update-path path token)]
+                            ; Reversing new-path as we want to drop starting from beginning and not the end
+                             (recur (conj result (assoc token :path (reverse new-path))) new-path (rest tokens)))
+                          ; Finally remove :path-start nodes as we don't need them anymore
+                          (filter-type :path-start result)))
+            tokens-with-paths (add-paths [] (list :root) tokens)]
+        ; Pass path-augmented nodes to the AST generator,
+        (:tokens (parser tokens-with-paths)))
+      (let [first-path #(-> % :path first)
+            path       (first-path (first tokens)) ; All tokens should have identical 1st path
+            partitions (partition-by first-path (map #(update % :path rest) tokens))
+            result     (if (> (count partitions) 1) ; Call recursively until a single partition remains
+                         (map #(parser %) partitions)
+                         (->> partitions first (filter-type :path-end) (map #(dissoc % :path))))]
+          {:path path :tokens result}))))
 
 (deftest test-parser
   (let [ast (-> "Hello{{#names}}, {{name}} (kids{{#kids}} {{.}}{{/kids}}){{/names}}!" lexer parser)]
-    (is (= [:names :kids] (-> ast (nth 1) (nth 1) :path)))))
+    (is (= {:type :reference, :value :name, :raw false} (-> ast (nth 1) :tokens (nth 0) :tokens (nth 1))))))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn flatten-ast
