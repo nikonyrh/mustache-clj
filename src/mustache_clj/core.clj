@@ -14,7 +14,7 @@
           make-token     (fn [bracket-count token]
                             (let [type  (or (bracket-types (first token)) (bracket-types bracket-count))]
                                 {:type  type
-                                 :value (if (= :reference type) (keyword token) token)
+                                 :value ((if (= :reference type) keyword identity) token)
                                  :raw   (= 10 bracket-count)}))]
       (->> tokens
         (map make-token bracket-counts)                              ; Create token hash-maps
@@ -35,48 +35,46 @@
                                            :path-start (push-path path token)
                                            :path-end   (pop path)
                                            path))
-            ; Go through tokens while keeping track of the path we are at
+            ; Go through tokens while keeping track of the path we are at...
             add-paths (fn [result path tokens]
                         (if-let [token (first tokens)]
                           (let [new-path (update-path path token)]
                             ; Reversing new-path as we want to drop starting from beginning and not the end
-                             (recur (conj result (assoc token :path (reverse new-path))) new-path (rest tokens)))
-                          ; Finally remove :path-start nodes as we don't need them anymore
+                            (recur (conj result (assoc token :path (reverse new-path))) new-path (rest tokens)))
+                          ; ...and finally remove :path-start nodes as we don't need them anymore
                           (filter-type :path-start result)))
             tokens-with-paths (add-paths [] (list :root) tokens)]
         ; Pass path-augmented nodes to the AST generator,
-        (:tokens (parser tokens-with-paths)))
+        (assoc (parser tokens-with-paths) :path nil))
       (let [first-path #(-> % :path first)
             path       (first-path (first tokens)) ; All tokens should have identical 1st path
-            partitions (partition-by first-path (map #(update % :path rest) tokens))
-            result     (if (> (count partitions) 1) ; Call recursively until a single partition remains
-                         (map #(parser %) partitions)
-                         (->> partitions first (filter-type :path-end) (map #(dissoc % :path))))]
-          {:path path :tokens result}))))
+            partitions (partition-by first-path (map #(update % :path rest) tokens))]
+        {:path path :tokens (if (> (count partitions) 1) ; Call recursively until a single partition remains
+                              (map parser partitions)
+                              (->> partitions first (filter-type :path-end) (map #(dissoc % :path))))}))))
 
 (deftest test-parser
   (let [ast (-> "Hello{{#names}}, {{name}} (kids{{#kids}} {{.}}{{/kids}}){{/names}}!" lexer parser)]
-    (is (= {:type :reference, :value :name, :raw false} (-> ast (nth 1) :tokens (nth 0) :tokens (nth 1))))))
+    (is (= {:type :reference, :value :name, :raw false} (-> ast :tokens (nth 1) :tokens (nth 0) :tokens (nth 1))))))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn flatten-ast
-  ([ast-node data] (flatten-ast ast-node data 0 []))
-  ([ast-node data tree-level path-prefix]
-   (if (seq? ast-node)
-     (flatten (map #(flatten-ast % data tree-level path-prefix) ast-node))
-     (let [data-key    (keyword (nth (:path ast-node) tree-level nil))
-           data        (get data data-key)
-           next-prefix (conj path-prefix data-key)
-           next-level  (inc tree-level)]
-       (if (nil? data)
-         (map #(if-not (= :reference (:type %)) % (assoc % :value (conj path-prefix (:value %)))) (:tokens ast-node))
-         (map #(flatten-ast ast-node %1 next-level (conj next-prefix %2)) data (range)))))))
+(defn merge-ast-and-data [ast data] 
+  (if-not (:tokens ast)
+    ; Not tokens, thus this isn't AST node but a single token
+    (if (= (:type ast) :reference)
+      ; :value is replaced by looking up its value from the current context's data
+      (update ast :value #(case % :. data (% data))) ast)
+    (if-let [path (:path ast)]
+      ; With :path on this AST node we'll iterate over each data item and AST child nodes
+      (for [data (get data path) ast (:tokens ast)] (merge-ast-and-data ast data))
+      ; With a nil path we'll just process each AST child node, while keeping the same data
+      (for [                     ast (:tokens ast)] (merge-ast-and-data ast data)))))
 
 (deftest test-flatten-ast
-  (let [ast  (-> "Hello{{#names}}, {{name}} (kids{{#kids}} {{.}}{{/kids}}){{/names}}!" lexer parser)
-        data {:names [{:name "Felix" :kids ["a" "b"]} {:name "Jenny"}]}]
-    ;(flatten-ast ast data)
-    (is (= {:value [:names 0 :kids 1 :.], :type :reference, :raw false} (-> (flatten-ast ast data) (nth 10))))))
+  (let [data {:names [{:name "Felix" :kids ["a" "b"]} {:name "Jenny"}]}
+        ast  (-> "Hello{{#names}}, {{&name}} (kids{{#kids}} {{.}}{{/kids}}){{/names}}!"
+               lexer parser (merge-ast-and-data data) flatten)]
+    (is (= {:type :reference, :value "b", :raw false} (nth ast 7)))))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn flatten-data
