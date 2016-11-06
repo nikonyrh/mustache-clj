@@ -65,9 +65,9 @@
       ; :value is replaced by looking up its value from the current context's data
       (update ast :value #(case % :. data (% data))) ast)
     (if-let [path (:path ast)]
-      ; With :path on this AST node we'll iterate over each data item and AST child nodes
+      ; With :path on this AST node we'll iterate over each data item and AST child nodes,
+      ; with a nil path we'll just process each AST child node, while keeping the same data
       (for [data (get data path) ast (:tokens ast)] (merge-ast-and-data ast data))
-      ; With a nil path we'll just process each AST child node, while keeping the same data
       (for [                     ast (:tokens ast)] (merge-ast-and-data ast data)))))
 
 (deftest test-flatten-ast
@@ -77,34 +77,15 @@
     (is (= {:type :reference, :value "b", :raw false} (nth ast 7)))))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn flatten-data
-  ([data] (into {} (flatten (flatten-data data []))))
-  ([data path-prefix]
-   (if-not (map? data)
-    {path-prefix data} ; Replace the key, keep data as is
-    (for [[k v] data]  ; Replace keys recursively, while keeping track of the parents' keys and indexes
-     (let [new-prefix (conj path-prefix k)]
-      (if (sequential? v)
-        (map #(flatten-data %1 (conj new-prefix %2)) v (range))
-        {new-prefix v}))))))
-
-(deftest test-flatten-data
-  (let [data {:names [{:name "Felix" :kids ["a" "b"]} {:name "Jenny"}]}]
-    (is (= "b" ((flatten-data data) [:names 0 :kids 1])))))
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-(defn replace-symbols [tokens data]
-  (let [mapping {\& "&amp;" \\ "&quot;" \> "&lt;" \< "&gt;"}
+(defn replace-symbols [tokens]
+  (let [mapping {\' "&apos;" \& "&amp;" (first "\"") "&quot;" \> "&gt;" \< "&lt;"}
         escape-html (fn [value] (apply str (map #(get mapping % %) value)))
-        token-fun #(let [bracket (:bracket %)
-                         token   (:value   %)]
-                     (if (= 0 bracket) token
-                       ((if (= 1 bracket) escape-html identity) (or (data (keyword token)) ""))))
-        result (apply str (map token-fun tokens))]
-    {:values tokens :result result}))
+        token-fun #(if (= (:raw %) false) (escape-html (:value %)) (:value %))]
+    (->> tokens (map token-fun) (apply str))))
 
-(defn render [template data]
-  (replace-symbols (parse-template template) data))
+(defn render
+  ([template] (render template {}))
+  ([template data] (-> template lexer parser (merge-ast-and-data data) flatten replace-symbols)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; From https://github.com/fhd/clostache/blob/master/test/clostache/test_parser.clj
@@ -127,7 +108,7 @@
   (is (= "&\"<>" (render "{{&string}}" {:string "&\"<>"}))))
 
 (deftest test-render-html-escaped
-  (is (= "&amp;&quot;&lt;&gt;" (render "{{string}}" {:string "&\\\"<>"}))))
+  (is (= "&amp;&quot;&lt;&gt;&apos;" (render "{{string}}" {:string "&\"<>'"}))))
 
 (deftest test-render-list
   (is (= "Hello, Felix, Jenny!" (render "Hello{{#names}}, {{name}}{{/names}}!"
@@ -140,7 +121,6 @@
                  {:names [{:name "Felix"} {:name "Jenny"}]}))))
 
 (deftest test-render-single-value
-  (is (= "Hello, Felix!" (render "Hello{{#person}}, {{name}}{{/person}}!"))))
-{:person {:name "Felix"}}
+  (is (= "Hello, Felix!" (render "Hello{{#person}}, {{name}}{{/person}}!" {:person {:name "Felix"}}))))
 
 (run-tests)
