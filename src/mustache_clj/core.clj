@@ -21,11 +21,6 @@
         (filter #(not (contains? bracket-kws (keyword (:value %))))) ; Remove {{, }}, {{{ and }}} elements
         (map #(if (= :reference (:type %)) % (dissoc % :raw)))))))   ; Remove :raw key from other types than :reference
 
-(deftest test-lexer
-  (let [tokens (-> "Hello{{#names}}, {{name}} (kids{{#kids}} {{{.}}}{{/kids}}){{/names}}!" lexer)]
-    (is (= {:value "#kids", :type :path-start} (nth tokens 5)))))
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
 (let [filter-type (fn [type coll] (filter #(not= (:type %) type) coll))]
   (defn parser [tokens]
     (if (nil? (:path (first tokens)))
@@ -53,39 +48,47 @@
                               (map parser partitions)
                               (->> partitions first (filter-type :path-end) (map #(dissoc % :path))))}))))
 
+(let [get-data (fn [data path]
+                 (let [value (get data path)]
+                   ; data values should be sequential (vec or list),
+                   ; but apparently the standard also supports single values.
+                   (if (sequential? value) value (list value))))]
+  (defn merge-ast-and-data [data ast]
+    (if-not (:tokens ast)
+      ; Not tokens, thus this isn't AST node but a single token
+      (if (= (:type ast) :reference)
+        ; :value is replaced by looking up its value from the current context's data
+        (update ast :value #(case % :. data (% data))) ast)
+      (if-let [path (:path ast)]
+        ; With :path on this AST node we'll iterate over each data item and AST child nodes,
+        ; with a nil path we'll just process each AST child node, while keeping the same data
+        (for [data (get-data data path) ast (:tokens ast)] (merge-ast-and-data data ast))
+        (for [                          ast (:tokens ast)] (merge-ast-and-data data ast))))))
+
+; Finally putting it all together!
+(defn render
+  ([template] (render template {}))
+  ([template data]
+   (let [mapping     {\' "&apos;" \& "&amp;" (first "\"") "&quot;" \> "&gt;" \< "&lt;"}
+         escape-html (fn [value] (apply str (map #(get mapping % %) value)))
+         escaper    #((if (= (:raw %) false) escape-html identity) (:value %))]
+     (->> template lexer parser (merge-ast-and-data data) flatten (map escaper) (apply str)))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; Testing our custom lexter, parser and other utility functions
 (deftest test-parser
   (let [ast (-> "Hello{{#names}}, {{name}} (kids{{#kids}} {{.}}{{/kids}}){{/names}}!" lexer parser)]
     (is (= {:type :reference, :value :name, :raw false} (-> ast :tokens (nth 1) :tokens (nth 0) :tokens (nth 1))))))
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn merge-ast-and-data [ast data] 
-  (if-not (:tokens ast)
-    ; Not tokens, thus this isn't AST node but a single token
-    (if (= (:type ast) :reference)
-      ; :value is replaced by looking up its value from the current context's data
-      (update ast :value #(case % :. data (% data))) ast)
-    (if-let [path (:path ast)]
-      ; With :path on this AST node we'll iterate over each data item and AST child nodes,
-      ; with a nil path we'll just process each AST child node, while keeping the same data
-      (for [data (get data path) ast (:tokens ast)] (merge-ast-and-data ast data))
-      (for [                     ast (:tokens ast)] (merge-ast-and-data ast data)))))
+(deftest test-lexer
+  (let [tokens (-> "Hello{{#names}}, {{name}} (kids{{#kids}} {{{.}}}{{/kids}}){{/names}}!" lexer)]
+    (is (= {:value "#kids", :type :path-start} (nth tokens 5)))))
 
-(deftest test-flatten-ast
+(deftest test-merge-ast-and-data
   (let [data {:names [{:name "Felix" :kids ["a" "b"]} {:name "Jenny"}]}
-        ast  (-> "Hello{{#names}}, {{&name}} (kids{{#kids}} {{.}}{{/kids}}){{/names}}!"
+        ast  (->> "Hello{{#names}}, {{&name}} (kids{{#kids}} {{.}}{{/kids}}){{/names}}!"
                lexer parser (merge-ast-and-data data) flatten)]
     (is (= {:type :reference, :value "b", :raw false} (nth ast 7)))))
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-(defn replace-symbols [tokens]
-  (let [mapping {\' "&apos;" \& "&amp;" (first "\"") "&quot;" \> "&gt;" \< "&lt;"}
-        escape-html (fn [value] (apply str (map #(get mapping % %) value)))
-        token-fun #(if (= (:raw %) false) (escape-html (:value %)) (:value %))]
-    (->> tokens (map token-fun) (apply str))))
-
-(defn render
-  ([template] (render template {}))
-  ([template data] (-> template lexer parser (merge-ast-and-data data) flatten replace-symbols)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; From https://github.com/fhd/clostache/blob/master/test/clostache/test_parser.clj
