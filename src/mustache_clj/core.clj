@@ -70,8 +70,9 @@
 
 ; Finally putting it all together!
 (defn render
-  ([template] (render template {}))
-  ([template data]
+  ([template]      (render template {}))
+  ([template data] (render template data {}))
+  ([template data partials]
    (let [mapping     {\' "&apos;" \& "&amp;" (first "\"") "&quot;" \> "&gt;" \< "&lt;"}
          escape-html (fn [value] (apply str (map #(get mapping % %) value)))
          escaper    #((if (= (:raw %) false) escape-html identity) (:value %))]
