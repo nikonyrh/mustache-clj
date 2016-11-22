@@ -4,6 +4,12 @@
 
 (defn filter-type [type coll] (filter #(not= (:type %) type) coll))
 
+; From https://gist.github.com/xpe/46128da5accb0acdf30d
+(defn iterate-until-stable
+  "Takes a function of one arg and calls (f x), (f (f x)), and so on
+  until the value does not change."
+  [x f] (loop [v x] (let [v' (f v)] (if (= v' v) v (recur v')))))
+
 (let [bracket-chars {\{ 1 \} 2}
       bracket-vals  {"{{" 1 "}}" -1 "{{{" 10 "}}}" -10}
       bracket-kws   (set (map keyword (keys bracket-vals)))
@@ -12,7 +18,8 @@
     ; Split a string to tokens, group by brackets, determine their types
     (let [template       (-> template
                              (str/replace #"\{\{&(.*?)\}\}" "{{{$1}}}")
-                             (str/replace #"\{\{([^ ]?)[ ]*([^ ]*?)[ ]*\}\}" "{{$1$2}}"))
+                             (str/replace #"\{\{([^ ]?)[ ]*([^ ]*?)[ ]*\}\}" "{{$1$2}}")
+                             (iterate-until-stable #(str/replace % #"\{\{([^\.\{]+)\.([^\}]+)\}\}" "{{#$1}}{{$2}}{{/$1}}")))
           tokens         (->> template (partition-by #(bracket-chars % 0)) (map (partial apply str)))
           bracket-counts (->> tokens   (map #(get bracket-vals % 0))       (reductions +))
           make-token     (fn [bracket-count token]
@@ -72,13 +79,13 @@
       (if (= (:type ast) :reference)
         ; :value is replaced by looking up its value from the current context's data
         (update ast :value #(case % :. data (% data))) ast)
-      (let [inverted (:inverted ast)
-            path (:path ast)]
+      (let [path      (:path ast)
+            this-data (get-data (:inverted ast) data path)]
         ; With :path on this AST node we'll iterate over each data item and AST child nodes,
         ; with a nil path we'll just process each AST child node, while keeping the same data
         (if path
-          (for [ast (:tokens ast) data (get-data inverted data path)] (merge-ast-and-data data ast))
-          (for [ast (:tokens ast)                                   ] (merge-ast-and-data data ast)))))))
+          (for [ast (:tokens ast) data this-data] (merge-ast-and-data data ast))
+          (for [ast (:tokens ast)               ] (merge-ast-and-data data ast)))))))
 
 ; Finally putting it all together!
 (defn render

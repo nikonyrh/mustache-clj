@@ -109,6 +109,6 @@
   (is (= (render "{{a}}"     {:a "value"})      "value"))
   (is (= (render "{{ a }}"   {:a "value"})      "value"))
   (is (= (render "{{a.b}}"   {:a {:b "value"}}) "value"))
-  (is (= (render "{{ a.b }}" {:a {:b "value"}}) "value")))
+  (is (= (render "{{ a.b.c }}" {:a {:b {:c "value"}}}) "value")))
 
 ;(run-tests)
