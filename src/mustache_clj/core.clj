@@ -7,12 +7,14 @@
 (let [bracket-chars {\{ 1 \} 2}
       bracket-vals  {"{{" 1 "}}" -1 "{{{" 10 "}}}" -10}
       bracket-kws   (set (map keyword (keys bracket-vals)))
-      bracket-types {0 :const 1 :reference 10 :reference \# :path-start \/ :path-end \! :comment}]
+      bracket-types {0 :const 1 :reference 10 :reference \# :path-start \/ :path-end \! :comment \^ :path-start}]
   (defn lexer [template]
     ; Split a string to tokens, group by brackets, determine their types
-    (let [template       (str/replace template #"\{\{&(.*?)\}\}" "{{{$1}}}")
-          tokens         (map (partial apply str) (partition-by #(bracket-chars % 0) template))
-          bracket-counts (reductions + (map #(get bracket-vals % 0) tokens))
+    (let [template       (-> template
+                             (str/replace #"\{\{&(.*?)\}\}" "{{{$1}}}")
+                             (str/replace #"\{\{([^ ]?)[ ]*([^ ]*?)[ ]*\}\}" "{{$1$2}}"))
+          tokens         (->> template (partition-by #(bracket-chars % 0)) (map (partial apply str)))
+          bracket-counts (->> tokens   (map #(get bracket-vals % 0))       (reductions +))
           make-token     (fn [bracket-count token]
                             (let [type (or (and (not= 0 bracket-count) (bracket-types (first token)))
                                            (bracket-types bracket-count))]
@@ -23,7 +25,8 @@
         (map make-token bracket-counts)                              ; Create token hash-maps
         (filter-type :comment)                                       ; Remove comments
         (filter #(not (contains? bracket-kws (keyword (:value %))))) ; Remove {{, }}, {{{ and }}} elements
-        (map #(if (= :reference (:type %)) % (dissoc % :raw)))))))   ; Remove :raw key from other types than :reference
+        (map #(if     (= :reference  (:type %)) % (dissoc % :raw)))  ; Remove :raw key from other types than :reference
+        (map #(if-not (= :path-start (:type %)) % (assoc  % :inverted (= \^ (first (:value %))))))))))
 
 (defn parser [tokens]
   (if (nil? (:path (first tokens)))
@@ -40,33 +43,42 @@
                           ; Reversing new-path as we want to drop starting from beginning and not the end
                           (recur (conj result (assoc token :path (reverse new-path))) new-path (rest tokens)))
                         ; ...and finally remove :path-start nodes as we don't need them anymore
-                        (filter-type :path-start result)))
-          tokens-with-paths (add-paths [] (list :root) tokens)]
+                        result))]
       ; Pass path-augmented nodes to the AST generator, replace place-holder path :root with nil
-      (assoc (parser tokens-with-paths) :path nil))
+      (->> tokens (add-paths [] (list :root)) parser))
     (let [first-path #(-> % :path first)
           path       (first-path (first tokens)) ; All tokens should have identical 1st path
+          path       (if (= :root path) nil path)
           partitions (->> tokens (map #(update % :path rest)) (partition-by first-path))]
-      {:path path :tokens (if (> (count partitions) 1) ; Call recursively until a single partition remains
-                            (map parser partitions)
-                            (->> partitions first (filter-type :path-end) (map #(dissoc % :path))))})))
+      {:path     path
+       :inverted (if path (:inverted (first tokens)) false)
+       :tokens   (if (> (count partitions) 1)
+                   (map parser partitions) ; Call recursively until a single partition remains
+                   (->> partitions first   ; Remove un-needed tokens and :path
+                        (filter-type :path-start)
+                        (filter-type :path-end)
+                        (map #(dissoc % :path))))})))
 
-(let [get-data (fn [data path]
-                 (let [value (get data path)]
-                   ; data values should be sequential (vec or list),
-                   ; but apparently the standard also supports single values.
-                   (if (sequential? value) value (list value))))]
+; data values should be sequential (vec or list),
+; but apparently the standard also supports single values.
+(let [to-sequential (fn [i] (if (sequential? i) i (list i)))
+      get-data      (fn [inverted data path]
+                      (let [value (get data path)]
+                        (if inverted (if-not value (list true))
+                          (if value (to-sequential value)))))]
   (defn merge-ast-and-data [data ast]
     (if-not (:tokens ast)
       ; Not tokens, thus this isn't AST node but a single token
       (if (= (:type ast) :reference)
         ; :value is replaced by looking up its value from the current context's data
         (update ast :value #(case % :. data (% data))) ast)
-      (if-let [path (:path ast)]
+      (let [inverted (:inverted ast)
+            path (:path ast)]
         ; With :path on this AST node we'll iterate over each data item and AST child nodes,
         ; with a nil path we'll just process each AST child node, while keeping the same data
-        (for [data (get-data data path) ast (:tokens ast)] (merge-ast-and-data data ast))
-        (for [                          ast (:tokens ast)] (merge-ast-and-data data ast))))))
+        (if path
+          (for [ast (:tokens ast) data (get-data inverted data path)] (merge-ast-and-data data ast))
+          (for [ast (:tokens ast)                                   ] (merge-ast-and-data data ast)))))))
 
 ; Finally putting it all together!
 (defn render
