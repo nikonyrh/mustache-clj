@@ -6,7 +6,7 @@
 ; Testing our custom lexter, parser and other utility functions
 (deftest test-lexer
   (let [tokens (-> "Hello{{#names}}, {{name}} (kids{{#kids}} {{{.}}}{{/kids}}){{/names}}!" lexer)]
-    (is (= {:value "#kids", :type :path-start} (nth tokens 5)))))
+    (is (= {:value "#kids", :type :path-start :inverted false} (nth tokens 5)))))
 
 (deftest test-parser
   (let [ast (-> "Hello{{#names}}, {{name}} (kids{{#kids}} {{.}}{{/kids}}){{/names}}!" lexer parser)]
@@ -84,6 +84,7 @@
   (is (= "Hello, Felix" (render "Hello, {{felix.name}}" {:felix {:name "Felix"}}))))
 
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (deftest test-render-with-partial
   (is (= "Hi, Felix" (render "Hi, {{>name}}" {:n "Felix"} {:name "{{n}}"}))))
 

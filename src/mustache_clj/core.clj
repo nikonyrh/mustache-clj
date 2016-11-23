@@ -10,23 +10,27 @@
   until the value does not change."
   [x f] (loop [v x] (let [v' (f v)] (if (= v' v) v (recur v')))))
 
+; Is this really so verbose in Clojure? :o
+(defn rest-str [string] (->> string rest (apply str)))
+
 (let [bracket-chars {\{ 1 \} 2}
       bracket-vals  {"{{" 1 "}}" -1 "{{{" 10 "}}}" -10}
       bracket-kws   (set (map keyword (keys bracket-vals)))
-      bracket-types {0 :const 1 :reference 10 :reference \# :path-start \/ :path-end \! :comment \^ :path-start}]
+      bracket-types {0 :const 1 :reference 10 :reference \# :path-start \/ :path-end \! :comment \^ :path-start \> :partial}
+      value-fun     {:reference keyword :partial #(-> % rest-str keyword)}]
   (defn lexer [template]
     ; Split a string to tokens, group by brackets, determine their types
     (let [template       (-> template
                              (str/replace #"\{\{&(.*?)\}\}" "{{{$1}}}")
                              (str/replace #"\{\{([^ ]?)[ ]*([^ ]*?)[ ]*\}\}" "{{$1$2}}")
-                             (iterate-until-stable #(str/replace % #"\{\{([^\.\{]+)\.([^\}]+)\}\}" "{{#$1}}{{$2}}{{/$1}}")))
+                             (iterate-until-stable #(str/replace % #"\{\{([^\.\{]+)\.([^\{\}]+)\}\}" "{{#$1}}{{$2}}{{/$1}}")))
           tokens         (->> template (partition-by #(bracket-chars % 0)) (map (partial apply str)))
           bracket-counts (->> tokens   (map #(get bracket-vals % 0))       (reductions +))
           make-token     (fn [bracket-count token]
                             (let [type (or (and (not= 0 bracket-count) (bracket-types (first token)))
                                            (bracket-types bracket-count))]
                                 {:type  type
-                                 :value ((if (= :reference type) keyword identity) token)
+                                 :value ((get value-fun type identity) token)
                                  :raw   (= 10 bracket-count)}))]
       (->> tokens
         (map make-token bracket-counts)                              ; Create token hash-maps
@@ -38,7 +42,7 @@
 (defn parser [tokens]
   (if (nil? (:path (first tokens)))
     ; Let's add paths first
-    (let [push-path   (fn [path token] (conj path (keyword (apply str (rest (:value token))))))
+    (let [push-path   (fn [path token] (conj path (-> token :value rest-str keyword)))
           update-path (fn [path token] (case (:type token)
                                          :path-start (push-path path token)
                                          :path-end   (pop path)
@@ -69,9 +73,10 @@
 ; data values should be sequential (vec or list),
 ; but apparently the standard also supports single values.
 (let [to-sequential (fn [i] (if (sequential? i) i (list i)))
-      get-data      (fn [inverted data path]
+      get-data      (fn [ast data path]
                       (let [value (get data path)]
-                        (if inverted (if-not value (list true))
+                        (if (:inverted ast)
+                          (if (if (coll? value) (empty? value) (not value)) (list true))
                           (if value (to-sequential value)))))]
   (defn merge-ast-and-data [data ast]
     (if-not (:tokens ast)
@@ -79,13 +84,12 @@
       (if (= (:type ast) :reference)
         ; :value is replaced by looking up its value from the current context's data
         (update ast :value #(case % :. data (% data))) ast)
-      (let [path      (:path ast)
-            this-data (get-data (:inverted ast) data path)]
+      (let [path (:path ast)]
         ; With :path on this AST node we'll iterate over each data item and AST child nodes,
         ; with a nil path we'll just process each AST child node, while keeping the same data
         (if path
-          (for [ast (:tokens ast) data this-data] (merge-ast-and-data data ast))
-          (for [ast (:tokens ast)               ] (merge-ast-and-data data ast)))))))
+          (for [data (get-data ast data path) ast (:tokens ast)] (merge-ast-and-data data ast))
+          (for [                              ast (:tokens ast)] (merge-ast-and-data data ast)))))))
 
 ; Finally putting it all together!
 (defn render
@@ -93,6 +97,6 @@
   ([template data] (render template data {}))
   ([template data partials]
    (let [mapping     {\' "&apos;" \& "&amp;" (first "\"") "&quot;" \> "&gt;" \< "&lt;"}
-         escape-html (fn [value] (apply str (map #(get mapping % %) value)))
-         escaper    #((if (= (:raw %) false) escape-html identity) (:value %))]
+         escape-html (fn [value] (->> value (map #(get mapping % %)) (apply str)))
+         escaper     (fn [token] (->> token :value ((if (= (:raw token) false) escape-html identity))))]
      (->> template lexer parser (merge-ast-and-data data) flatten (map escaper) (apply str)))))
