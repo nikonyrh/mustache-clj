@@ -3,7 +3,7 @@
   (:require [clojure.string :as str]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; Testing our custom lexter, parser and other utility functions
+; Testing our custom lexer, parser and other utility functions
 (deftest test-lexer
   (let [tokens (-> "Hello{{#names}}, {{name}} (kids{{#kids}} {{{.}}}{{/kids}}){{/names}}!" lexer)]
     (is (= {:value "#kids", :type :path-start :inverted false} (nth tokens 5)))))
