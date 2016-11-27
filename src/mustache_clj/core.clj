@@ -37,7 +37,7 @@
         (filter-type :comment)                                       ; Remove comments
         (filter #(not (contains? bracket-kws (keyword (:value %))))) ; Remove {{, }}, {{{ and }}} elements
         (map #(if     (= :reference  (:type %)) % (dissoc % :raw)))  ; Remove :raw key from other types than :reference
-        (map #(if-not (= :path-start (:type %)) % (assoc  % :inverted (= \^ (first (:value %))))))))))
+        (map #(if-not (= :path-start (:type %)) % (assoc  % :inverted (= \^ (first (:value %)))))))))) ; Set :inverted for :path-start
 
 (defn parser [tokens]
   (if (nil? (:path (first tokens)))
@@ -72,7 +72,7 @@
 
 ; data values should be sequential (vec or list),
 ; but apparently the standard also supports single values.
-(let [to-sequential (fn [i] (if (sequential? i) i (list i)))
+(let [to-sequential (fn [i] (if (or (sequential? i) (sorted? i)) i (list i)))
       get-data      (fn [ast data path]
                       (let [value (get data path)]
                         (if (:inverted ast)
@@ -91,12 +91,25 @@
           (for [data (get-data ast data path) ast (:tokens ast)] (merge-ast-and-data data ast))
           (for [                              ast (:tokens ast)] (merge-ast-and-data data ast)))))))
 
+(defn resolve-partials [partials tokens]
+  (let [update-map       (fn [coll f] (->> coll seq (map (fn [kv] [(first kv) (-> kv (nth 1) f)])) (into {})))
+        ; First pass partials through the lexer
+        partials         (update-map partials lexer)
+        ; Given partials and tokens, replaces :partial tokens with the referenced tokens
+        resolve-partial  (fn [p token] (if-not (= :partial (:type token)) token ((:value token) p)))
+        ; A function to resolve partials which refer to other partials...
+        resolve-partials (fn [p] (update-map p (fn [tokens] (->> tokens (map #(resolve-partial p %)) flatten))))
+        ; ...is iterated until it is converged, which means all references have been solved (can end up into an infinite loop!)
+        partials         (iterate-until-stable partials resolve-partials)]
+    ; Now that partials self-references have been solved, we can resolve references from ast partials
+    (->> tokens (map #(resolve-partial partials %)) flatten)))
+
 ; Finally putting it all together!
 (defn render
-  ([template]      (render template {}))
+  ([template]      (render template {} {}))
   ([template data] (render template data {}))
   ([template data partials]
    (let [mapping     {\' "&apos;" \& "&amp;" (first "\"") "&quot;" \> "&gt;" \< "&lt;"}
-         escape-html (fn [value] (->> value (map #(get mapping % %)) (apply str)))
+         escape-html (fn [value] (if (or (coll? value) (string? value)) (->> value (map #(get mapping % %)) (apply str)) (str value)))
          escaper     (fn [token] (->> token :value ((if (= (:raw token) false) escape-html identity))))]
-     (->> template lexer parser (merge-ast-and-data data) flatten (map escaper) (apply str)))))
+     (->> template lexer (resolve-partials partials) parser (merge-ast-and-data data) flatten (map escaper) (apply str)))))
