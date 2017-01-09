@@ -1,0 +1,6 @@
+*
+!*/
+!*.clj
+!*.md
+target/
+!.gitignore

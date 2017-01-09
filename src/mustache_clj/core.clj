@@ -1,6 +1,6 @@
 (ns mustache-clj.core (:gen-class)
   (:use clojure.test)
-  (:require [clojure.string :as str]))
+  (:use [clojure.string :only [replace] :rename {replace str-replace}]))
 
 (defn filter-type [type coll] (filter #(not= (:type %) type) coll))
 
@@ -21,9 +21,9 @@
   (defn lexer [template]
     ; Split a string to tokens, group by brackets, determine their types
     (let [template       (-> template
-                             (str/replace #"\{\{&(.*?)\}\}" "{{{$1}}}")
-                             (str/replace #"\{\{([^ ]?)[ ]*([^ ]*?)[ ]*\}\}" "{{$1$2}}")
-                             (iterate-until-stable #(str/replace % #"\{\{([^\.\{]+)\.([^\{\}]+)\}\}" "{{#$1}}{{$2}}{{/$1}}")))
+                             (str-replace  #"\{\{&(.*?)\}\}" "{{{$1}}}")
+                             (str-replace  #"\{\{([^ ]?)[ ]*([^ ]*?)[ ]*\}\}" "{{$1$2}}")
+                             (iterate-until-stable #(str-replace  % #"\{\{([^\.\{]+)\.([^\{\}]+)\}\}" "{{#$1}}{{$2}}{{/$1}}")))
           tokens         (->> template (partition-by #(bracket-chars % 0)) (map (partial apply str)))
           bracket-counts (->> tokens   (map #(get bracket-vals % 0))       (reductions +))
           make-token     (fn [bracket-count token]
@@ -106,7 +106,7 @@
 
 ; Finally putting it all together!
 (defn render
-  ([template]      (render template {} {}))
+  ([template]      (render template {}   {}))
   ([template data] (render template data {}))
   ([template data partials]
    (let [mapping     {\' "&apos;" \& "&amp;" (first "\"") "&quot;" \> "&gt;" \< "&lt;"}
