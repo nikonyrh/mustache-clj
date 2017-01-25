@@ -53,9 +53,9 @@
                         (let [new-path (update-path path token)]
                           ; Reversing new-path as we want to drop starting from beginning and not the end
                           (recur (conj result (assoc token :path (reverse new-path))) new-path (rest tokens)))
-                        result))
+                        result))]
       ; Pass path-augmented nodes to the AST generator, replace place-holder path :root with nil
-          (->> tokens (add-paths [] (list :root)) parser)])
+      (->> tokens (add-paths [] (list :root)) parser))
     (let [first-path #(-> % :path first)
           path       (first-path (first tokens)) ; All tokens should have identical 1st path
           path       (if (= :root path) nil path)
@@ -83,12 +83,11 @@
       (if (= (:type ast) :reference)
         ; :value is replaced by looking up its value from the current context's data
         (update ast :value #(case % :. data (% data))) ast)
-      (let [path (:path ast)]
+      (if-let [path (:path ast)]
         ; With :path on this AST node we'll iterate over each data item and AST child nodes,
         ; with a nil path we'll just process each AST child node, while keeping the same data
-        (if path
-          (for [data (get-data ast data path) ast (:tokens ast)] (merge-ast-and-data data ast))
-          (for [                              ast (:tokens ast)] (merge-ast-and-data data ast)))))))
+        (for [data (get-data ast data path) ast (:tokens ast)] (merge-ast-and-data data ast))
+        (for [                              ast (:tokens ast)] (merge-ast-and-data data ast))))))
 
 (defn resolve-partials [partials tokens]
   (let [update-map       (fn [coll f] (->> coll seq (map (fn [[k v]] [k (f v)])) (into {})))
