@@ -21,9 +21,9 @@
   (defn lexer [template]
     ; Split a string to tokens, group by brackets, determine their types
     (let [template       (-> template
-                             (str-replace  #"\{\{&(.*?)\}\}" "{{{$1}}}")
-                             (str-replace  #"\{\{([^ ]?)[ ]*([^ ]*?)[ ]*\}\}" "{{$1$2}}")
-                             (iterate-until-stable #(str-replace  % #"\{\{([^\.\{]+)\.([^\{\}]+)\}\}" "{{#$1}}{{$2}}{{/$1}}")))
+                             (str-replace  #"\{\{&(.*?)\}\}" "{{{$1}}}")                  ; Unify {{&example}} to {{{example}}}
+                             (str-replace  #"\{\{([^ ]?)[ ]*([^ ]*?)[ ]*\}\}" "{{$1$2}}") ; Unify {{ example }} to {{example}}
+                             (iterate-until-stable #(str-replace  % #"\{\{([^\.\{]+)\.([^\{\}]+)\}\}" "{{#$1}}{{$2}}{{/$1}}"))) ; Unify {{a.b}} to {{#a}}{{b}}{{/a}}
           tokens         (->> template (partition-by #(bracket-chars % 0)) (map (partial apply str)))
           bracket-counts (->> tokens   (map #(get bracket-vals % 0))       (reductions +))
           make-token     (fn [bracket-count token]
@@ -53,10 +53,9 @@
                         (let [new-path (update-path path token)]
                           ; Reversing new-path as we want to drop starting from beginning and not the end
                           (recur (conj result (assoc token :path (reverse new-path))) new-path (rest tokens)))
-                        ; ...and finally remove :path-start nodes as we don't need them anymore
-                        result))]
+                        result))
       ; Pass path-augmented nodes to the AST generator, replace place-holder path :root with nil
-      (->> tokens (add-paths [] (list :root)) parser))
+          (->> tokens (add-paths [] (list :root)) parser)])
     (let [first-path #(-> % :path first)
           path       (first-path (first tokens)) ; All tokens should have identical 1st path
           path       (if (= :root path) nil path)
@@ -92,7 +91,7 @@
           (for [                              ast (:tokens ast)] (merge-ast-and-data data ast)))))))
 
 (defn resolve-partials [partials tokens]
-  (let [update-map       (fn [coll f] (->> coll seq (map (fn [kv] [(first kv) (-> kv (nth 1) f)])) (into {})))
+  (let [update-map       (fn [coll f] (->> coll seq (map (fn [[k v]] [k (f v)])) (into {})))
         ; First pass partials through the lexer
         partials         (update-map partials lexer)
         ; Given partials and tokens, replaces :partial tokens with the referenced tokens
