@@ -1,5 +1,7 @@
-(ns mustache-clj.tests (:gen-class)
-  (:use clojure.test mustache-clj.core))
+(ns mustache-clj.core-test
+  (:require [clojure.test :refer :all]
+            [mustache-clj.core :refer :all])
+  (:gen-class))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Testing our custom lexer, parser and other utility functions

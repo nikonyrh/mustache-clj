@@ -1,6 +1,6 @@
-(ns mustache-clj.core (:gen-class)
-  (:use clojure.test)
-  (:use [clojure.string :only [replace] :rename {replace str-replace}]))
+(ns mustache-clj.core
+  (:use [clojure.string :only [replace] :rename {replace str-replace}])
+  (:gen-class))
 
 (defn filter-type [type coll] (filter #(not= (:type %) type) coll))
 
@@ -10,8 +10,7 @@
   until the value does not change."
   [x f] (loop [v x] (let [v' (f v)] (if (= v' v) v (recur v')))))
 
-; Is this really so verbose in Clojure? :o
-(defn rest-str [string] (->> string rest (apply str)))
+(defn rest-str [s] (subs s 1))
 
 (let [bracket-chars {\{ 1 \} 2}
       bracket-vals  {"{{" 1 "}}" -1 "{{{" 10 "}}}" -10}
