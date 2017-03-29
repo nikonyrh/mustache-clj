@@ -1,4 +1,4 @@
-(defproject mustache-clj "0.1.0"
+(defproject org.clojars.nikonyrh.mustache-clj "0.1.0"
   :description "Mustache templating algorithm"
   :url         "https://github.com/nikonyrh/mustache-clj"
   :license {:name "Apache License, Version 2.0"
